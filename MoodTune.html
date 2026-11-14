@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moodtune - music that reads your mood</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<!-- Face + expression detection runs locally in the browser (nothing is uploaded) -->
+<script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+<style>
+@property --h { syntax: '<number>'; inherits: true; initial-value: 225; }
+:root {
+  --h: 225;
+  --accent: hsl(var(--h) 85% 66%);
+  --accent2: hsl(calc(var(--h) + 45) 85% 62%);
+  --glass: rgba(255,255,255,.055);
+  --line: rgba(255,255,255,.12);
+  --text: #f3f5fc;
+  --muted: #9ba2ba;
+  transition: --h 1.4s ease;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; }
+body {
+  font-family: 'Outfit', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: #07080f; color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+
+/* animated mood background */
+.bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: #07080f; }
+.bg::before, .bg::after {
+  content: ''; position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%;
+  filter: blur(90px); opacity: .5; animation: drift 26s ease-in-out infinite alternate;
+}
+.bg::before { background: radial-gradient(circle, hsl(var(--h) 80% 38%), transparent 65%); top: -25vmax; left: -15vmax; }
+.bg::after  { background: radial-gradient(circle, hsl(calc(var(--h) + 60) 75% 32%), transparent 65%); bottom: -30vmax; right: -20vmax; animation-duration: 34s; animation-direction: alternate-reverse; }
+@keyframes drift { from { transform: translate(0,0) scale(1); } to { transform: translate(8vmax, 5vmax) scale(1.18); } }
+
+header {
+  max-width: 1120px; margin: 0 auto; padding: 22px 20px 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.logo { font-weight: 700; font-size: 1.45rem; letter-spacing: .3px; display: flex; align-items: center; gap: 10px; }
+.logo i {
+  width: 26px; height: 26px; border-radius: 50%; display: inline-block;
+  background: conic-gradient(from 0deg, var(--accent), var(--accent2), var(--accent));
+  box-shadow: 0 0 22px var(--accent); animation: spin 8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.seg { display: inline-flex; background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
+.seg button { padding: 8px 16px; border-radius: 999px; font-size: .92rem; color: var(--muted); transition: .25s; }
+.seg button.on { background: var(--accent); color: #0a0b14; font-weight: 600; }
+
+main {
+  max-width: 1120px; margin: 0 auto; padding: 16px 20px 40px;
+  display: grid; grid-template-columns: 1fr 1.1fr; gap: 22px;
+}
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card {
+  background: var(--glass); border: 1px solid var(--line); border-radius: 26px; padding: 22px;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-weight: 500; margin-bottom: 14px; }
+
+/* camera */
+.viewport { position: relative; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #0b0d18; border: 1px solid var(--line); }
+.viewport video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: none; }
+.viewport.live video { display: block; }
+.placeholder { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 8px; color: var(--muted); }
+.placeholder b { font-size: 3rem; filter: grayscale(.4); }
+.viewport.live .placeholder { display: none; }
+.scanline {
+  position: absolute; left: 0; right: 0; height: 90px; top: -90px; pointer-events: none; opacity: 0;
+  background: linear-gradient(180deg, transparent, hsl(var(--h) 90% 65% / .45), transparent);
+}
+.viewport.scanning .scanline { opacity: 1; animation: sweep 1.6s ease-in-out infinite; }
+.viewport.scanning { box-shadow: 0 0 0 2px var(--accent), 0 0 34px hsl(var(--h) 90% 60% / .5); }
+@keyframes sweep { from { top: -90px; } to { top: 100%; } }
+.badge {
+  position: absolute; right: 12px; top: 12px; font-size: 2rem; background: rgba(0,0,0,.45);
+  border-radius: 14px; padding: 4px 10px; backdrop-filter: blur(8px); display: none;
+}
+.viewport.live .badge { display: block; }
+.primary {
+  margin-top: 16px; width: 100%; padding: 15px; border-radius: 16px; font-weight: 600; font-size: 1.05rem; color: #090a12;
+  background: linear-gradient(120deg, var(--accent), var(--accent2)); transition: transform .15s, filter .2s;
+  box-shadow: 0 10px 30px hsl(var(--h) 80% 50% / .35);
+}
+.primary:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.primary:disabled { opacity: .6; cursor: progress; transform: none; }
+.status { min-height: 1.4em; margin-top: 12px; font-size: .92rem; color: var(--muted); }
+.bars { display: grid; gap: 7px; margin-top: 12px; }
+.bar { display: grid; grid-template-columns: 26px 1fr 38px; align-items: center; gap: 8px; font-size: .78rem; color: var(--muted); }
+.bar .track { height: 7px; border-radius: 9px; background: rgba(255,255,255,.08); overflow: hidden; }
+.bar .fill { height: 100%; width: 0; border-radius: 9px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .25s; }
+.bar.top { color: var(--text); }
+.bar span:last-child { text-align: right; }
+
+/* player */
+.mood-now { display: flex; align-items: center; gap: 16px; }
+.mood-now .emoji { font-size: 3.4rem; line-height: 1; }
+.mood-now .label { font-size: 1.7rem; font-weight: 600; }
+.mood-now .sub { color: var(--muted); font-size: .95rem; margin-top: 2px; }
+.now { display: flex; gap: 18px; align-items: center; margin: 22px 0 8px; padding: 16px; border-radius: 20px; background: rgba(0,0,0,.25); border: 1px solid var(--line); }
+.vinyl {
+  flex: none; width: 86px; height: 86px; border-radius: 50%;
+  background: radial-gradient(circle, #0b0c14 0 14%, var(--accent) 15% 24%, #12131d 25% 100%), conic-gradient(#222, #3a3a46, #222, #3a3a46, #222);
+  box-shadow: 0 0 0 3px #1a1b26, 0 10px 30px hsl(var(--h) 80% 50% / .35); position: relative;
+}
+.vinyl::after { content: ''; position: absolute; inset: 8px; border-radius: 50%; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 0 0 7px rgba(255,255,255,.03); }
+.vinyl.playing { animation: spin 3.6s linear infinite; }
+.meta { min-width: 0; }
+#title { font-size: 1.25rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#artist { color: var(--muted); font-size: .92rem; margin-top: 2px; }
+.prog { display: grid; grid-template-columns: 38px 1fr 38px; align-items: center; gap: 10px; font-size: .78rem; color: var(--muted); margin: 14px 2px 4px; }
+.prog .track { height: 5px; border-radius: 9px; background: rgba(255,255,255,.1); overflow: hidden; }
+.prog .fill { height: 100%; width: 0; background: var(--accent); }
+.ctrl { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 10px 0 6px; }
+.ctrl button { width: 46px; height: 46px; border-radius: 50%; background: var(--glass); border: 1px solid var(--line); font-size: 1.1rem; transition: .2s; }
+.ctrl button:hover { background: rgba(255,255,255,.14); }
+.ctrl #pp { width: 62px; height: 62px; background: var(--accent); color: #090a12; font-size: 1.35rem; border: 0; box-shadow: 0 8px 26px hsl(var(--h) 80% 50% / .4); }
+.vol { display: flex; align-items: center; gap: 10px; justify-content: center; color: var(--muted); font-size: .85rem; margin-bottom: 14px; }
+input[type=range] { accent-color: var(--accent); width: 150px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.chip { padding: 8px 13px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); font-size: .9rem; transition: .2s; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { background: var(--accent); color: #090a12; border-color: transparent; font-weight: 600; }
+.tracks { display: grid; gap: 6px; margin-bottom: 14px; }
+.tr { display: flex; justify-content: space-between; padding: 10px 14px; border-radius: 12px; background: rgba(255,255,255,.04); font-size: .93rem; text-align: left; width: 100%; transition: .2s; }
+.tr:hover { background: rgba(255,255,255,.09); }
+.tr.on { background: hsl(var(--h) 70% 50% / .22); outline: 1px solid hsl(var(--h) 80% 60% / .5); }
+.tr small { color: var(--muted); }
+.auto { display: flex; align-items: center; gap: 10px; font-size: .9rem; color: var(--muted); cursor: pointer; }
+.auto input { accent-color: var(--accent); width: 17px; height: 17px; }
+footer { max-width: 1120px; margin: 0 auto; padding: 0 20px 34px; color: var(--muted); font-size: .82rem; text-align: center; line-height: 1.6; }
+
+.idle-pill {
+  position: fixed; right: 16px; bottom: 16px; padding: 7px 14px; border-radius: 999px; font-size: .8rem;
+  color: var(--muted); background: rgba(0,0,0,.4); border: 1px solid var(--line); backdrop-filter: blur(8px); z-index: 5;
+}
+
+/* screensaver */
+#saver {
+  position: fixed; inset: 0; z-index: 100; background: #04050a; cursor: none;
+  opacity: 0; pointer-events: none; visibility: hidden; transition: opacity 1.2s ease, visibility 0s 1.2s;
+}
+#saver.on { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity 1.2s ease; }
+#saver canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ss-info { position: absolute; left: 0; right: 0; bottom: 9vh; text-align: center; text-shadow: 0 2px 24px rgba(0,0,0,.7); padding: 0 20px; }
+.ss-clock { font-size: clamp(2.4rem, 8vw, 5rem); font-weight: 200; letter-spacing: 4px; }
+.ss-title { font-size: clamp(1.1rem, 3vw, 1.7rem); font-weight: 500; margin-top: 6px; }
+.ss-sub { color: var(--muted); margin-top: 4px; }
+.ss-hint { position: absolute; top: 4vh; width: 100%; text-align: center; color: rgba(255,255,255,.35); font-size: .85rem; letter-spacing: 1px; }
+/* spotify */
+.sp-card { grid-column: 1 / -1; }
+.sp-card summary { cursor: pointer; font-weight: 600; font-size: 1.05rem; list-style: none; display: flex; align-items: center; gap: 10px; }
+.sp-card summary::-webkit-details-marker { display: none; }
+.sp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
+.fld { display: grid; gap: 5px; font-size: .8rem; color: var(--muted); }
+.fld input { background: rgba(0,0,0,.3); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; color: var(--text); font: inherit; font-size: .9rem; width: 100%; }
+.fld input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.sp-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.btn2 { padding: 10px 18px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line); font-size: .9rem; transition: .2s; }
+.btn2:hover { background: rgba(255,255,255,.14); }
+.btn2.go { background: #1db954; color: #06130a; font-weight: 600; border: 0; }
+.sp-note { font-size: .84rem; color: var(--muted); line-height: 1.7; margin-top: 12px; }
+.sp-note code { background: rgba(0,0,0,.4); padding: 2px 7px; border-radius: 6px; user-select: all; color: var(--text); }
+.vinyl.art { background-size: cover; background-position: center; }
+#ssArt { display: none; width: min(26vmin, 170px); height: min(26vmin, 170px); object-fit: cover; border-radius: 18px; margin: 0 auto 16px; box-shadow: 0 12px 50px rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+
+<header>
+  <div class="logo"><i></i>Moodtune</div>
+  <div class="seg" id="srcSeg" role="group" aria-label="Music source">
+    <button class="on" data-src="builtin">Built-in music</button>
+    <button data-src="spotify">Spotify</button>
+  </div>
+  <div class="seg" id="modeSeg" role="group" aria-label="Music mode">
+    <button class="on" data-mode="match">Match my mood</button>
+    <button data-mode="lift">Lift my mood</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Your mood</h2>
+    <div class="viewport" id="viewport">
+      <video id="video" playsinline muted></video>
+      <div class="placeholder"><b>📷</b><span>Camera is off</span></div>
+      <div class="scanline"></div>
+      <div class="badge" id="badge">🙂</div>
+    </div>
+    <button class="primary" id="startBtn">Read my mood</button>
+    <p class="status" id="status">Allow camera access, look at the screen, and I'll pick a song for you.</p>
+    <div class="bars" id="bars"></div>
+  </section>
+
+  <section class="card">
+    <h2>Now playing</h2>
+    <div class="mood-now">
+      <div class="emoji" id="emoji">🎧</div>
+      <div>
+        <div class="label" id="moodLabel">No mood yet</div>
+        <div class="sub" id="moodSub">Scan your face, or pick a mood below</div>
+      </div>
+    </div>
+
+    <div class="now">
+      <div class="vinyl" id="vinyl"></div>
+      <div class="meta">
+        <div id="title">Nothing playing</div>
+        <div id="artist">Moodtune</div>
+      </div>
+    </div>
+    <div class="prog"><span id="tPos">0:00</span><div class="track"><div class="fill" id="pFill"></div></div><span id="tTot">0:00</span></div>
+    <div class="ctrl">
+      <button id="prev" aria-label="Previous">⏮</button>
+      <button id="pp" aria-label="Play or pause">▶</button>
+      <button id="next" aria-label="Next">⏭</button>
+    </div>
+    <div class="vol">🔈 <input type="range" id="vol" min="0" max="1" step="0.01" value="0.75" aria-label="Volume"> 🔊</div>
+
+    <h2>Or choose how you feel</h2>
+    <div class="chips" id="chips"></div>
+
+    <h2 id="listTitle">Playlist</h2>
+    <div class="tracks" id="tracks"></div>
+
+    <label class="auto"><input type="checkbox" id="auto"> Keep watching my mood and switch songs when it changes</label>
+  </section>
+  <section class="card sp-card" id="spCard">
+    <details id="spDetails">
+      <summary>🟢 Spotify setup <span id="spState" style="color:var(--muted);font-weight:400;font-size:.9rem">· not connected</span></summary>
+      <p class="sp-note">
+        1) Create an app at <b>developer.spotify.com/dashboard</b> and tick <b>Web API</b> and <b>Web Playback SDK</b>.<br>
+        2) Add this exact Redirect URI to the app: <code id="redir"></code><br>
+        3) Paste the app's <b>Client ID</b> below, then press <b>Save &amp; connect</b>.<br>
+        Needs a <b>Spotify Premium</b> account, and the page must be served over http, not opened as a file:
+        run <code>python -m http.server 8000</code> in this folder and open <code>http://127.0.0.1:8000</code>.
+      </p>
+      <div class="sp-grid">
+        <label class="fld">Client ID<input id="spClient" placeholder="e.g. 3f9a1c0d2b7e4c5a8d6e..." spellcheck="false" autocomplete="off"></label>
+      </div>
+      <h2 style="margin-top:22px">What plays for each mood</h2>
+      <div class="sp-grid" id="spMap"></div>
+      <p class="sp-note">Paste a Spotify playlist, album or artist link (or URI). Leave a box empty to search Spotify by mood keywords instead. If a playlist can't be played, Moodtune falls back to that keyword search automatically.</p>
+      <div class="sp-row">
+        <button class="btn2 go" id="spConnect">Save &amp; connect Spotify</button>
+        <button class="btn2" id="spSave">Save playlists</button>
+        <button class="btn2" id="spReset">Reset playlists</button>
+        <button class="btn2" id="spDisc">Disconnect</button>
+      </div>
+    </details>
+  </section>
+</main>
+
+<footer>
+  Your camera video is analysed on your device only and is never uploaded. Expression detection is approximate, so use the mood buttons whenever it guesses wrong.<br>
+  Built-in songs are generated live in your browser. Switch to Spotify (Premium) to hear real songs for each mood.
+</footer>
+
+<div class="idle-pill" id="idlePill">🌙 Screensaver in 60s</div>
+
+<div id="saver" aria-hidden="true">
+  <canvas id="sc"></canvas>
+  <div class="ss-hint">Move your mouse or tap anywhere to return</div>
+  <div class="ss-info">
+    <img id="ssArt" alt="">
+    <div class="ss-clock" id="ssClock"></div>
+    <div class="ss-title" id="ssTitle"></div>
+    <div class="ss-sub" id="ssSub"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const fmt = s => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+/* ---------------------------------------------------------------- data */
+const EMOTIONS = ['neutral', 'happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised'];
+const EMO = {
+  neutral:   { e: '😌', l: 'Neutral' },
+  happy:     { e: '😄', l: 'Happy' },
+  sad:       { e: '😢', l: 'Sad' },
+  angry:     { e: '😠', l: 'Angry' },
+  fearful:   { e: '😨', l: 'Anxious' },
+  disgusted: { e: '🤢', l: 'Disgusted' },
+  surprised: { e: '😲', l: 'Surprised' }
+};
+// "Match my mood" and "Lift my mood" map each emotion to a playlist
+const MATCH = { happy: 'happy', neutral: 'calm', sad: 'sad', angry: 'intense', fearful: 'tense', disgusted: 'groove', surprised: 'sparkle' };
+const LIFT  = { happy: 'happy', neutral: 'calm', sad: 'hopeful', angry: 'calm', fearful: 'calm', disgusted: 'happy', surprised: 'happy' };
+
+const SC = {
+  maj: [0,2,4,5,7,9,11], min: [0,2,3,5,7,8,10], dor: [0,2,3,5,7,9,10], phr: [0,1,3,5,7,8,10],
+  lyd: [0,2,4,6,7,9,11], mix: [0,2,4,5,7,9,10], hmin: [0,2,3,5,7,8,11]
+};
+// root = MIDI note, prog = scale degrees of chords, drums = pattern key
+const LISTS = {
+  happy: { name: 'Sunshine', h: 45, desc: 'bright, bouncy', tracks: [
+    { t: 'Sunny Side Loop',   bpm: 118, root: 60, sc: 'maj', prog: [0,4,5,3], pad: 'triangle', lead: 'square',   drums: 'four',    leadP: .6 },
+    { t: 'Golden Hour',       bpm: 104, root: 55, sc: 'mix', prog: [0,6,3,0], pad: 'triangle', lead: 'triangle', drums: 'four',    leadP: .55 } ] },
+  calm: { name: 'Still Water', h: 190, desc: 'slow, peaceful', tracks: [
+    { t: 'Still Water',       bpm: 70, root: 57, sc: 'maj', prog: [0,3,0,4], pad: 'sine', lead: 'sine', drums: 'none', arpEvery: 2, leadP: .3 },
+    { t: 'Drift',             bpm: 62, root: 53, sc: 'lyd', prog: [0,1,0,3], pad: 'sine', lead: 'triangle', drums: 'none', arpEvery: 2, leadP: .3 } ] },
+  sad: { name: 'Rainy Window', h: 225, desc: 'soft, melancholic', tracks: [
+    { t: 'Rainy Window',      bpm: 66, root: 57, sc: 'min', prog: [0,5,2,6], pad: 'sine', lead: 'triangle', drums: 'none', arpEvery: 2, leadP: .35 },
+    { t: 'Last Train Home',   bpm: 72, root: 50, sc: 'min', prog: [0,3,5,4], pad: 'sine', lead: 'sine',     drums: 'soft', arpEvery: 2, leadP: .35 } ] },
+  intense: { name: 'Red Line', h: 355, desc: 'heavy, driving', tracks: [
+    { t: 'Redline',           bpm: 140, root: 45, sc: 'phr',  prog: [0,1,0,4], pad: 'sawtooth', lead: 'sawtooth', bass: 'sawtooth', drums: 'driving', cut: 800, leadP: .5 },
+    { t: 'Iron Pulse',        bpm: 128, root: 40, sc: 'hmin', prog: [0,5,4,0], pad: 'sawtooth', lead: 'square',   bass: 'sawtooth', drums: 'driving', cut: 800, leadP: .45 } ] },
+  tense: { name: 'Suspense', h: 275, desc: 'dark, suspenseful', tracks: [
+    { t: 'Shadows Move',      bpm: 84, root: 48, sc: 'hmin', prog: [0,1,5,4], pad: 'sawtooth', lead: 'sine', drums: 'soft', cut: 700, arpEvery: 2, leadP: .3 },
+    { t: 'Held Breath',       bpm: 76, root: 52, sc: 'phr',  prog: [0,1,0,1], pad: 'sawtooth', lead: 'triangle', drums: 'soft', cut: 700, arpEvery: 2, leadP: .3 } ] },
+  groove: { name: 'Funk Lab', h: 135, desc: 'funky, groovy', tracks: [
+    { t: 'Funky Pulse',       bpm: 100, root: 52, sc: 'dor', prog: [0,3,0,4], pad: 'triangle', lead: 'square', drums: 'groove', leadP: .6 },
+    { t: 'Slick Back',        bpm: 96,  root: 57, sc: 'dor', prog: [0,3,6,3], pad: 'triangle', lead: 'triangle', drums: 'groove', leadP: .55 } ] },
+  sparkle: { name: 'Confetti', h: 320, desc: 'sparkly, upbeat', tracks: [
+    { t: 'Pop Rocks',         bpm: 126, root: 64, sc: 'lyd', prog: [0,1,4,0], pad: 'triangle', lead: 'triangle', drums: 'four', leadP: .65 },
+    { t: 'Confetti',          bpm: 112, root: 62, sc: 'maj', prog: [0,2,3,4], pad: 'triangle', lead: 'square',   drums: 'four', leadP: .6 } ] },
+  hopeful: { name: 'First Light', h: 165, desc: 'warm, uplifting', tracks: [
+    { t: 'First Light',       bpm: 88, root: 55, sc: 'maj', prog: [5,3,0,4], pad: 'triangle', lead: 'sine',     drums: 'soft', leadP: .45 },
+    { t: 'Open Window',       bpm: 80, root: 60, sc: 'maj', prog: [0,2,3,4], pad: 'sine',     lead: 'triangle', drums: 'soft', leadP: .45 } ] }
+};
+const DRUMS = {
+  none:    { k: [], s: [], h: [], bass: [0], bl: 6 },
+  soft:    { k: [0], s: [], h: [4], hv: .05, kv: .35, bass: [0,4], bl: 3.4 },
+  four:    { k: [0,2,4,6], s: [2,6], h: [1,3,5,7], hv: .1, kv: .55, bass: [0,3,4,7], bl: 1.5 },
+  groove:  { k: [0,3,6], s: [2,6], h: [0,1,2,3,4,5,6,7], hv: .06, kv: .5, bass: [0,3,5,6], bl: 1.2 },
+  driving: { k: [0,3,4,6], s: [2,6], h: [0,1,2,3,4,5,6,7], hv: .08, kv: .6, bass: [0,1,2,3,4,5,6,7], bl: 1 }
+};
+const ARP = [0,1,2,3,2,1,2,1];
+const OFFS = [0,2,4,4,1,6,7,3];
+
+/* ------------------------------------------------- music engine (Web Audio) */
+const Player = (() => {
+  let ctx, master, analyser, reverbIn, noise, run = null, vol = .75, freqData;
+  const api = { onEnd: null, onState: null };
+  const fit = (m, lo) => lo + (((m - lo) % 12) + 12) % 12;
+  const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  function init() {
+    if (ctx) return;
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain(); master.gain.value = vol;
+    analyser = ctx.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant = .82;
+    master.connect(analyser); analyser.connect(ctx.destination);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+
+    const len = Math.floor(ctx.sampleRate * 2.4), imp = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = imp.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+    const conv = ctx.createConvolver(); conv.buffer = imp;
+    reverbIn = ctx.createGain(); reverbIn.gain.value = .35;
+    const wet = ctx.createGain(); wet.gain.value = .6;
+    reverbIn.connect(conv); conv.connect(wet); wet.connect(master);
+
+    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    ctx.onstatechange = () => api.onState && api.onState(ctx.state);
+  }
+
+  function tone(f, t, dur, o) {
+    const osc = ctx.createOscillator(); osc.type = o.type || 'sine'; osc.frequency.value = f;
+    if (o.detune) osc.detune.value = o.detune;
+    const g = ctx.createGain(), a = o.a || .01, r = o.r || .1, v = o.vol || .1;
+    dur = Math.max(dur, a + .02);
+    g.gain.setValueAtTime(.0001, t);
+    g.gain.linearRampToValueAtTime(v, t + a);
+    g.gain.setValueAtTime(v, t + dur);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur + r);
+    if (o.cutoff) { const fl = ctx.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = o.cutoff; osc.connect(fl); fl.connect(g); }
+    else osc.connect(g);
+    g.connect(o.dest);
+    osc.start(t); osc.stop(t + dur + r + .05);
+  }
+  function kick(t, d, v) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + .12);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + .3);
+    o.connect(g); g.connect(d); o.start(t); o.stop(t + .32);
+  }
+  function hit(t, d, o) {
+    const s = ctx.createBufferSource(); s.buffer = noise;
+    const f = ctx.createBiquadFilter(); f.type = o.type; f.frequency.value = o.freq; f.Q.value = o.q || 1;
+    const g = ctx.createGain(); g.gain.setValueAtTime(o.vol, t); g.gain.exponentialRampToValueAtTime(.001, t + o.dur);
+    s.connect(f); f.connect(g); g.connect(d); s.start(t, Math.random() * .5); s.stop(t + o.dur + .02);
+  }
+  const hat = (t, d, v) => hit(t, d, { type: 'highpass', freq: 7500, dur: .04, vol: v });
+  function snare(t, d, v) {
+    hit(t, d, { type: 'bandpass', freq: 1800, dur: .14, vol: v, q: .8 });
+    tone(190, t, .05, { type: 'triangle', vol: v * .5, a: .002, r: .08, dest: d });
+  }
+
+  const newMotif = tr => Array.from({ length: 8 }, (_, i) =>
+    (Math.random() < (tr.leadP ?? .5) && (i % 2 === 0 || Math.random() < .4)) ? pick(OFFS) : null);
+  const mutate = m => { for (let k = 0; k < 2; k++) m[Math.floor(Math.random() * 8)] = Math.random() < .35 ? null : pick(OFFS); };
+
+  function playStep(r, t) {
+    const tr = r.track, sc = SC[tr.sc], n = sc.length, s = r.step % 8, bar = (r.step / 8) | 0;
+    const deg = tr.prog[bar % tr.prog.length], spb = r.spb, d = r.bus;
+    const mid = x => tr.root + 12 * Math.floor(x / n) + sc[((x % n) + n) % n];
+    const chord = [mid(deg), mid(deg + 2), mid(deg + 4)];
+    const dr = DRUMS[tr.drums || 'none'];
+
+    if (s === 0) {
+      for (const m of chord) {
+        const f = hz(fit(m, 55));
+        for (const dt of [-7, 7]) tone(f, t, spb * 8, { type: tr.pad || 'triangle', vol: .032, a: .6, r: .8, detune: dt, cutoff: tr.cut || 1300, dest: d });
+      }
+      if (bar > 0 && bar % 4 === 0) mutate(r.motif);
+    }
+    if (dr.bass.includes(s)) tone(hz(fit(chord[0], 36)), t, spb * dr.bl, { type: tr.bass || 'triangle', vol: .22, a: .01, r: .12, cutoff: tr.bass === 'sawtooth' ? 420 : 0, dest: d });
+    if (s % (tr.arpEvery || 1) === 0) {
+      const ts = chord.map(m => fit(m, 60)).sort((a, b) => a - b); ts.push(ts[0] + 12);
+      tone(hz(ts[(tr.arp || ARP)[s]]), t, spb * 1.3, { type: tr.arpW || 'triangle', vol: .05, a: .005, r: .2, dest: d });
+    }
+    const mv = r.motif[s];
+    if (mv !== null) tone(hz(fit(mid(deg + mv), 67)), t, spb * 1.7, { type: tr.lead || 'sine', vol: .07, a: .02, r: .25, cutoff: 2600, dest: d });
+
+    if (dr.k.includes(s)) kick(t, d, dr.kv || .5);
+    if (dr.s.includes(s)) snare(t, d, .3);
+    if (dr.h.includes(s)) hat(t, d, dr.hv || .08);
+  }
+
+  function tick(r) {
+    if (r !== run) return;
+    const total = r.maxBars * 8;
+    while (r.step < total && r.next < ctx.currentTime + 1.2) { playStep(r, r.next); r.next += r.spb; r.step++; }
+    if (r.step >= total && ctx.currentTime >= r.next - .05) { clearInterval(r.timer); api.onEnd && api.onEnd(); }
+  }
+  function stopRun() {
+    if (!run) return;
+    const r = run; run = null; clearInterval(r.timer);
+    r.bus.gain.setTargetAtTime(0, ctx.currentTime, .25);
+    setTimeout(() => { try { r.bus.disconnect(); } catch (e) {} }, 2500);
+  }
+
+  api.init = init;
+  api.unlock = () => { init(); if (ctx.state === 'suspended') ctx.resume(); };
+  api.play = track => {
+    init(); ctx.resume(); stopRun();
+    const bus = ctx.createGain(); bus.gain.value = 0; bus.gain.setTargetAtTime(.9, ctx.currentTime, .4);
+    bus.connect(master); bus.connect(reverbIn);
+    const spb = 60 / track.bpm / 2, maxBars = Math.max(16, Math.round(150 / (8 * spb) / 4) * 4);
+    const t0 = ctx.currentTime + .15;
+    run = { track, bus, spb, step: 0, next: t0, t0, maxBars, motif: newMotif(track) };
+    run.timer = setInterval(() => tick(run), 100);
+    tick(run);
+  };
+  api.toggle = () => { if (!ctx) return; ctx.state === 'running' ? ctx.suspend() : ctx.resume(); };
+  api.stop = () => stopRun();
+  api.setVol = v => { vol = v; if (ctx) master.gain.setTargetAtTime(v, ctx.currentTime, .05); };
+  api.freq = () => { if (!ctx || !run || ctx.state !== 'running') return null; analyser.getByteFrequencyData(freqData); return freqData; };
+  api.progress = () => run ? { pos: Math.min(ctx.currentTime - run.t0, run.maxBars * 8 * run.spb), total: run.maxBars * 8 * run.spb } : null;
+  api.isPlaying = () => !!(ctx && run && ctx.state === 'running');
+  api.hasTrack = () => !!run;
+  return api;
+})();
+
+/* ------------------------------------------------------------------ Spotify */
+// Default playlist/search per mood. Edit them in the "Spotify setup" panel on the page.
+const SP_DEFAULTS = {
+  happy:   { uri: 'spotify:playlist:37i9dQZF1DXdPec7aLTmlC', q: 'happy upbeat feel good' },
+  calm:    { uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO', q: 'calm chill acoustic' },
+  sad:     { uri: 'spotify:playlist:37i9dQZF1DX7qK8ma5wgG1', q: 'sad emotional ballad' },
+  intense: { uri: 'spotify:playlist:37i9dQZF1DX76Wlfdnj7AP', q: 'hard rock workout energy' },
+  tense:   { uri: '', q: 'dark ambient cinematic suspense' },
+  groove:  { uri: '', q: 'funk soul groove' },
+  sparkle: { uri: '', q: 'dance pop party hits' },
+  hopeful: { uri: 'spotify:playlist:37i9dQZF1DX3rxVfibe1L0', q: 'uplifting hopeful feel good acoustic' }
+};
+const SP = (() => {
+  const SCOPES = 'streaming user-read-email user-read-private user-modify-playback-state user-read-playback-state';
+  const REDIRECT = location.origin + location.pathname;
+  const ls = {
+    get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} },
+    del: k => { try { localStorage.removeItem(k); } catch (e) {} }
+  };
+  const api = { ready: false, deviceId: null, paused: true, pos: 0, posAt: 0, dur: 0, track: null, vol: .75,
+                onState: null, onStatus: null, onReady: null, redirect: REDIRECT };
+  let player = null, sdkP = null, transferred = false;
+  const say = m => api.onStatus && api.onStatus(m);
+
+  const norm = s => {
+    s = (s || '').trim(); if (!s) return '';
+    let m = s.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?(playlist|album|artist)\/([A-Za-z0-9]+)/);
+    if (m) return `spotify:${m[1]}:${m[2]}`;
+    if (/^spotify:(playlist|album|artist):[A-Za-z0-9]+$/.test(s)) return s;
+    if (/^[A-Za-z0-9]{22}$/.test(s)) return 'spotify:playlist:' + s;
+    return '';
+  };
+  api.clientId = () => ls.get('mt_sp_client') || '';
+  api.setClientId = v => ls.set('mt_sp_client', (v || '').trim());
+  api.getSource = () => ls.get('mt_source') || 'builtin';
+  api.setSource = v => ls.set('mt_source', v);
+  api.rawMap = () => { try { return JSON.parse(ls.get('mt_sp_map') || '{}'); } catch (e) { return {}; } };
+  api.saveMap = o => ls.set('mt_sp_map', JSON.stringify(o));
+  api.resetMap = () => ls.del('mt_sp_map');
+  api.config = () => {
+    const saved = api.rawMap(), out = {};
+    for (const k in SP_DEFAULTS) out[k] = { uri: (k in saved) ? norm(saved[k]) : SP_DEFAULTS[k].uri, q: SP_DEFAULTS[k].q };
+    return out;
+  };
+
+  /* --- login: Authorization Code + PKCE (no backend, no client secret) --- */
+  const rnd = n => { const a = new Uint8Array(n); crypto.getRandomValues(a); const cs = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; return Array.from(a, b => cs[b % 62]).join(''); };
+  const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  api.login = async () => {
+    const id = api.clientId(); if (!id) throw new Error('no-client');
+    const v = rnd(64); ls.set('mt_sp_verifier', v);
+    const ch = b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)));
+    const p = new URLSearchParams({ client_id: id, response_type: 'code', redirect_uri: REDIRECT, scope: SCOPES, code_challenge_method: 'S256', code_challenge: ch });
+    location.href = 'https://accounts.spotify.com/authorize?' + p.toString();
+  };
+  async function tokenReq(body) {
+    const r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) });
+    if (!r.ok) throw new Error('token');
+    const j = await r.json();
+    ls.set('mt_sp_at', j.access_token);
+    if (j.refresh_token) ls.set('mt_sp_rt', j.refresh_token);
+    ls.set('mt_sp_exp', String(Date.now() + (j.expires_in - 60) * 1000));
+    return j.access_token;
+  }
+  api.handleRedirect = async () => {
+    const q = new URLSearchParams(location.search), code = q.get('code'), err = q.get('error');
+    if (!code && !err) return false;
+    ['code', 'state', 'error'].forEach(k => q.delete(k));
+    history.replaceState({}, '', location.pathname + (q.toString() ? '?' + q.toString() : ''));
+    if (err) { say('Spotify login was cancelled.'); return false; }
+    await tokenReq({ client_id: api.clientId(), grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: ls.get('mt_sp_verifier') || '' });
+    return true;
+  };
+  api.connected = () => !!(ls.get('mt_sp_rt') || ls.get('mt_sp_at'));
+  api.token = async () => {
+    const at = ls.get('mt_sp_at'), exp = +ls.get('mt_sp_exp') || 0;
+    if (at && Date.now() < exp) return at;
+    const rt = ls.get('mt_sp_rt'); if (!rt) throw new Error('auth');
+    return tokenReq({ client_id: api.clientId(), grant_type: 'refresh_token', refresh_token: rt });
+  };
+  api.logout = () => {
+    try { player && player.disconnect(); } catch (e) {}
+    ['mt_sp_at', 'mt_sp_rt', 'mt_sp_exp', 'mt_sp_verifier'].forEach(ls.del);
+    player = null; sdkP = null; transferred = false; api.ready = false; api.track = null; api.paused = true;
+  };
+
+  /* --- Web Playback SDK: makes this page a Spotify device --- */
+  function loadSDK() {
+    if (sdkP) return sdkP;
+    sdkP = new Promise((res, rej) => {
+      if (window.Spotify) return res();
+      window.onSpotifyWebPlaybackSDKReady = res;
+      const s = document.createElement('script'); s.src = 'https://sdk.scdn.co/spotify-player.js';
+      s.onerror = () => rej(new Error('sdk')); document.head.appendChild(s);
+    });
+    return sdkP;
+  }
+  api.init = async () => {
+    if (player) return;
+    await loadSDK();
+    player = new Spotify.Player({ name: 'Moodtune', getOAuthToken: cb => { api.token().then(cb).catch(() => {}); }, volume: api.vol });
+    player.addListener('ready', ({ device_id }) => { api.deviceId = device_id; api.ready = true; api.onReady && api.onReady(); });
+    player.addListener('not_ready', () => { api.ready = false; });
+    player.addListener('initialization_error', ({ message }) => say('Spotify: ' + message));
+    player.addListener('authentication_error', () => { api.ready = false; say('Spotify login expired. Press "Save & connect Spotify" again.'); });
+    player.addListener('account_error', () => say('Spotify Premium is required to play full songs in the browser.'));
+    player.addListener('playback_error', ({ message }) => say('Spotify playback error: ' + message));
+    player.addListener('player_state_changed', st => {
+      if (!st) return;
+      api.paused = st.paused; api.pos = st.position; api.posAt = performance.now(); api.dur = st.duration;
+      const t = st.track_window && st.track_window.current_track;
+      api.track = t ? { name: t.name, artist: t.artists.map(a => a.name).join(', '), art: ((t.album.images || [])[0] || {}).url || '' } : null;
+      api.onState && api.onState();
+    });
+    player.connect();
+  };
+  api.activate = () => { try { player && player.activateElement(); } catch (e) {} };
+  api.toggle = () => { try { player && player.togglePlay(); } catch (e) {} };
+  api.pause = () => { try { player && player.pause(); } catch (e) {} };
+  api.skip = dir => { try { player && (dir > 0 ? player.nextTrack() : player.previousTrack()); } catch (e) {} };
+  api.setVol = v => { api.vol = v; try { player && player.setVolume(v); } catch (e) {} };
+  api.position = () => api.paused ? api.pos : Math.min(api.dur, api.pos + performance.now() - api.posAt);
+
+  /* --- Web API: choose + start music for a mood --- */
+  async function call(path, method, body) {
+    const t = await api.token();
+    return fetch('https://api.spotify.com/v1' + path, {
+      method: method || 'GET',
+      headers: Object.assign({ Authorization: 'Bearer ' + t }, body ? { 'Content-Type': 'application/json' } : {}),
+      body: body ? JSON.stringify(body) : undefined
+    });
+  }
+  async function failReason(r) { try { const j = await r.json(); return (j.error && j.error.reason) || ''; } catch (e) { return ''; } }
+  api.playMood = async key => {
+    if (!api.ready) return false;
+    const c = api.config()[key], dev = encodeURIComponent(api.deviceId);
+    if (!transferred) {
+      try { await call('/me/player', 'PUT', { device_ids: [api.deviceId], play: false }); transferred = true; await new Promise(r => setTimeout(r, 400)); } catch (e) {}
+    }
+    try { await call(`/me/player/shuffle?state=true&device_id=${dev}`, 'PUT'); } catch (e) {}
+    if (c.uri) {
+      const r = await call(`/me/player/play?device_id=${dev}`, 'PUT', { context_uri: c.uri });
+      if (r.ok) return true;
+      if (await failReason(r) === 'PREMIUM_REQUIRED') { say('Spotify Premium is required to play full songs in the browser.'); return false; }
+    }
+    // fallback: search by mood keywords
+    const s = await call(`/search?q=${encodeURIComponent(c.q)}&type=track&limit=10`);
+    if (!s.ok) return false;
+    const j = await s.json();
+    const uris = ((j.tracks && j.tracks.items) || []).map(t => t.uri).sort(() => Math.random() - .5);
+    if (!uris.length) return false;
+    const r2 = await call(`/me/player/play?device_id=${dev}`, 'PUT', { uris });
+    if (!r2.ok && await failReason(r2) === 'PREMIUM_REQUIRED') say('Spotify Premium is required to play full songs in the browser.');
+    return r2.ok;
+  };
+  return api;
+})();
+// every user gesture that unlocks built-in audio also unlocks the Spotify player
+const _unlock = Player.unlock;
+Player.unlock = () => { _unlock(); SP.activate(); };
+
+/* ---------------------------------------------------------------- app state */
+const state = { mode: 'match', emotion: null, listKey: null, trackIdx: 0, stream: null, modelsReady: false, auto: false, scanning: false, source: 'builtin', useSP: false };
+const video = $('video'), viewport = $('viewport');
+let curHue = 225;
+
+function setStatus(t) { $('status').textContent = t; }
+function setHue(h) { curHue = h; document.documentElement.style.setProperty('--h', h); }
+
+/* emotion bars + manual chips */
+const barsEl = $('bars'), chipsEl = $('chips');
+EMOTIONS.forEach(e => {
+  barsEl.insertAdjacentHTML('beforeend',
+    `<div class="bar" id="bar-${e}"><span>${EMO[e].e}</span><div class="track"><div class="fill"></div></div><span>0%</span></div>`);
+  const b = document.createElement('button');
+  b.className = 'chip'; b.dataset.e = e; b.textContent = EMO[e].e + ' ' + EMO[e].l;
+  b.onclick = () => { Player.unlock(); applyMood(e, null, 'manual'); };
+  chipsEl.appendChild(b);
+});
+function updateBars(ex) {
+  let top = null, tv = -1;
+  for (const e of EMOTIONS) { const v = ex[e] || 0; if (v > tv) { tv = v; top = e; } }
+  for (const e of EMOTIONS) {
+    const el = $('bar-' + e), v = ex[e] || 0;
+    el.querySelector('.fill').style.width = (v * 100).toFixed(0) + '%';
+    el.lastElementChild.textContent = Math.round(v * 100) + '%';
+    el.classList.toggle('top', e === top);
+  }
+  $('badge').textContent = EMO[top].e;
+}
+
+/* ------------------------------------------------------- camera + detection */
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+async function ensureCamera() {
+  if (!state.modelsReady) {
+    if (typeof faceapi === 'undefined') throw new Error('faceapi-missing');
+    setStatus('Loading the emotion model (first time only)…');
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+    state.modelsReady = true;
+  }
+  if (!state.stream) {
+    setStatus('Starting your camera…');
+    state.stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
+    video.srcObject = state.stream;
+    await video.play();
+    viewport.classList.add('live');
+  }
+}
+async function scan(duration = 3500, quiet = false) {
+  if (state.scanning) return null;
+  state.scanning = true; viewport.classList.add('scanning');
+  if (!quiet) setStatus('Look at the camera… reading your expression');
+  const acc = Object.fromEntries(EMOTIONS.map(e => [e, 0])); let n = 0;
+  const end = performance.now() + duration;
+  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: .4 });
+  try {
+    while (performance.now() < end) {
+      const r = await faceapi.detectSingleFace(video, opts).withFaceExpressions();
+      if (r) { n++; for (const e of EMOTIONS) acc[e] += r.expressions[e] || 0; updateBars(r.expressions); }
+      await sleep(120);
+    }
+  } finally { state.scanning = false; viewport.classList.remove('scanning'); }
+  if (!n) { if (!quiet) setStatus("I couldn't see a face. Move into the light and try again, or pick a mood."); return null; }
+  const avg = {}; for (const e of EMOTIONS) avg[e] = acc[e] / n;
+  updateBars(avg);
+  // Detectors over-report "neutral", so it gets slightly down-weighted
+  let best = 'neutral', bv = -1;
+  for (const e of EMOTIONS) { const v = avg[e] * (e === 'neutral' ? .7 : 1); if (v > bv) { bv = v; best = e; } }
+  return { emotion: best, conf: avg[best] };
+}
+
+$('startBtn').onclick = async () => {
+  if (state.scanning) return;
+  Player.unlock();
+  const btn = $('startBtn'); btn.disabled = true;
+  try {
+    await ensureCamera();
+    const res = await scan();
+    if (res) applyMood(res.emotion, res.conf, 'camera');
+    btn.textContent = 'Scan again';
+  } catch (err) {
+    console.error(err);
+    if (err && err.message === 'faceapi-missing') setStatus("Couldn't load the emotion model (it needs internet the first time). Pick a mood below instead.");
+    else if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) setStatus('Camera permission was blocked. Allow it in the address bar, or pick a mood below.');
+    else if (err && err.name === 'NotFoundError') setStatus('No camera found. Pick a mood below instead.');
+    else setStatus('Something went wrong starting the camera. You can still pick a mood below.');
+  } finally { btn.disabled = false; }
+};
+
+/* auto-adapt */
+$('auto').onchange = e => {
+  if (e.target.checked && !state.stream) { e.target.checked = false; setStatus('Tap "Read my mood" first so the camera is on.'); return; }
+  state.auto = e.target.checked;
+};
+setInterval(async () => {
+  if (!state.auto || !state.stream || state.scanning || !state.listKey) return;
+  try {
+    const r = await scan(2500, true);
+    if (r && r.conf > .45 && r.emotion !== state.emotion) applyMood(r.emotion, r.conf, 'camera');
+  } catch (e) {}
+}, 45000);
+
+/* ------------------------------------------------------------ mood + playback */
+function applyMood(emotion, conf, source) {
+  state.emotion = emotion;
+  const key = (state.mode === 'match' ? MATCH : LIFT)[emotion];
+  const list = LISTS[key];
+  $('emoji').textContent = EMO[emotion].e;
+  $('moodLabel').textContent = (source === 'camera' ? 'You look ' : 'Feeling ') + EMO[emotion].l.toLowerCase();
+  const how = state.mode === 'match' ? 'Matching your mood with' : 'Lifting your mood with';
+  $('moodSub').textContent = `${how} ${list.desc} music` + (conf ? ` · ${Math.round(conf * 100)}% sure` : '');
+  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.e === emotion));
+  if (source === 'camera') setStatus(`Playing from the "${list.name}" playlist.`);
+  playTrack(key, null);
+}
+function playTrack(key, idx) {
+  const list = LISTS[key];
+  if (idx === null) { idx = Math.floor(Math.random() * list.tracks.length); if (state.listKey === key && list.tracks.length > 1 && idx === state.trackIdx) idx = (idx + 1) % list.tracks.length; }
+  state.listKey = key; state.trackIdx = idx;
+  if (state.source === 'spotify') {
+    if (SP.ready) {
+      Player.stop(); state.useSP = true; setHue(list.h); renderNow();
+      SP.playMood(key).then(ok => {
+        if (!ok) {
+          state.useSP = false;
+          setStatus("Couldn't play from Spotify (it needs Premium, or that playlist isn't accessible), so I switched to the built-in music.");
+          Player.play(list.tracks[idx]); renderNow();
+        }
+      }).catch(() => { state.useSP = false; Player.play(list.tracks[idx]); renderNow(); });
+      return;
+    }
+    setStatus('Spotify is still connecting, so the built-in music is playing for now.');
+  }
+  state.useSP = false; SP.pause();
+  Player.play(list.tracks[idx]);
+  setHue(list.h);
+  renderNow();
+}
+function setArt(url) {
+  const v = $('vinyl'), a = $('ssArt');
+  if (url) { v.classList.add('art'); v.style.backgroundImage = `url("${url}")`; a.src = url; a.style.display = 'block'; }
+  else { v.classList.remove('art'); v.style.backgroundImage = ''; a.style.display = 'none'; a.removeAttribute('src'); }
+}
+function renderNow() {
+  setArt('');
+  if (!state.useSP) { renderBuiltin(); return; }
+  const list = LISTS[state.listKey];
+  $('title').textContent = 'Loading from Spotify…';
+  $('artist').textContent = `Spotify · ${list.name} mood`;
+  $('listTitle').textContent = `Spotify · ${list.name} mood`;
+  $('tracks').innerHTML = '<p class="sp-note">Songs are shuffled from the Spotify playlist chosen for this mood. You can change it in "Spotify setup" below.</p>';
+  $('ssTitle').textContent = 'Spotify';
+  $('ssSub').textContent = (state.emotion ? EMO[state.emotion].e + ' ' : '') + list.name;
+}
+function renderBuiltin() {
+  const list = LISTS[state.listKey], t = list.tracks[state.trackIdx];
+  $('title').textContent = t.t;
+  $('artist').textContent = `Moodtune · ${list.name}`;
+  $('listTitle').textContent = `Playlist · ${list.name}`;
+  const box = $('tracks'); box.innerHTML = '';
+  list.tracks.forEach((tr, i) => {
+    const b = document.createElement('button'); b.className = 'tr' + (i === state.trackIdx ? ' on' : '');
+    b.innerHTML = `<span>${tr.t}</span><small>${tr.bpm} BPM</small>`;
+    b.onclick = () => { Player.unlock(); playTrack(state.listKey, i); };
+    box.appendChild(b);
+  });
+  $('ssTitle').textContent = t.t;
+  $('ssSub').textContent = (state.emotion ? EMO[state.emotion].e + ' ' : '') + list.name;
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: t.t, artist: 'Moodtune · ' + list.name });
+      navigator.mediaSession.setActionHandler('play', () => Player.toggle());
+      navigator.mediaSession.setActionHandler('pause', () => Player.toggle());
+      navigator.mediaSession.setActionHandler('nexttrack', () => step(1));
+      navigator.mediaSession.setActionHandler('previoustrack', () => step(-1));
+    } catch (e) {}
+  }
+}
+function step(dir) {
+  if (!state.listKey) return;
+  if (state.useSP) { SP.skip(dir); return; }
+  const n = LISTS[state.listKey].tracks.length;
+  playTrack(state.listKey, (state.trackIdx + dir + n) % n);
+}
+Player.onEnd = () => step(1);
+Player.onState = () => syncPlayUI();
+function syncPlayUI() {
+  const p = state.useSP ? (SP.ready && !SP.paused && !!SP.track) : Player.isPlaying();
+  $('pp').textContent = p ? '⏸' : '▶';
+  $('vinyl').classList.toggle('playing', p);
+}
+$('pp').onclick = () => { if (!state.listKey) return; state.useSP ? SP.toggle() : Player.toggle(); };
+$('next').onclick = () => { Player.unlock(); step(1); };
+$('prev').onclick = () => { Player.unlock(); step(-1); };
+$('vol').oninput = e => { const v = parseFloat(e.target.value); Player.setVol(v); SP.setVol(v); };
+$('modeSeg').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.mode = b.dataset.mode;
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x === b));
+  if (state.emotion) { Player.unlock(); applyMood(state.emotion, null, 'manual'); }
+};
+setInterval(() => {
+  const p = state.useSP ? (SP.track ? { pos: SP.position() / 1000, total: SP.dur / 1000 } : null) : Player.progress();
+  if (p) { $('pFill').style.width = (p.pos / p.total * 100) + '%'; $('tPos').textContent = fmt(p.pos); $('tTot').textContent = fmt(p.total); }
+  syncPlayUI();
+}, 250);
+
+/* ------------------------------------------------------- idle + screensaver */
+const qIdle = parseFloat(new URLSearchParams(location.search).get('idle'));
+const IDLE_MS = (qIdle > 0 ? qIdle : 60) * 1000;
+const saver = $('saver'), sc = $('sc'), g = sc.getContext('2d');
+let lastAct = Date.now(), ssOn = false, ssShownAt = 0, raf = 0, wake = null;
+
+function onActivity() {
+  if (ssOn && Date.now() - ssShownAt < 800) return;   // ignore jitter right as it appears
+  lastAct = Date.now();
+  if (ssOn) hideSaver();
+}
+['mousemove', 'mousedown', 'pointerdown', 'keydown', 'touchstart', 'wheel', 'scroll', 'click']
+  .forEach(ev => window.addEventListener(ev, onActivity, { passive: true }));
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => wake = null); } } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Player.hasTrack()) keepAwake(); });
+
+function sizeCanvas() { sc.width = innerWidth; sc.height = innerHeight; g.fillStyle = '#04050a'; g.fillRect(0, 0, sc.width, sc.height); }
+addEventListener('resize', () => { if (ssOn) sizeCanvas(); });
+
+const orbs = Array.from({ length: 40 }, () => ({
+  a: Math.random() * 6.283, r: .12 + Math.random() * .38, s: (Math.random() - .5) * .0004,
+  size: 5 + Math.random() * 20, ho: Math.random() * 90 - 45
+}));
+const synth = new Uint8Array(128);
+
+function showSaver() {
+  ssOn = true; ssShownAt = Date.now();
+  sizeCanvas(); saver.classList.add('on'); saver.setAttribute('aria-hidden', 'false');
+  tickClock(); keepAwake();
+  cancelAnimationFrame(raf); raf = requestAnimationFrame(drawSaver);
+}
+function hideSaver() {
+  ssOn = false; saver.classList.remove('on'); saver.setAttribute('aria-hidden', 'true');
+  cancelAnimationFrame(raf);
+}
+function tickClock() { $('ssClock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+setInterval(() => { if (ssOn) tickClock(); }, 1000);
+
+function drawSaver(ts) {
+  if (!ssOn) return;
+  const w = sc.width, h = sc.height, cx = w / 2, cy = h * .45, m = Math.min(w, h);
+  let arr = Player.freq();
+  if (!arr) { for (let i = 0; i < 128; i++) synth[i] = 70 + 50 * Math.sin(ts * .0016 + i * .25); arr = synth; }
+  const avg = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += arr[i]; return s / (b - a) / 255; };
+  const bass = avg(0, 6), mid = avg(6, 40), hue = curHue + ts * .008;
+
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = 'rgba(4,5,10,.17)'; g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = 'lighter';
+
+  for (const o of orbs) {
+    const ang = o.a + ts * o.s, rad = o.r * m * (1 + bass * .25);
+    const x = cx + Math.cos(ang) * rad * 1.35, y = cy + Math.sin(ang) * rad;
+    g.fillStyle = `hsla(${hue + o.ho},85%,60%,.45)`;
+    g.beginPath(); g.arc(x, y, o.size * (1 + mid * 2.2), 0, 6.283); g.fill();
+  }
+  const R = m * .17 + bass * m * .05;
+  g.lineCap = 'round'; g.lineWidth = Math.max(2, m * .004);
+  for (let i = 0; i < 72; i++) {
+    const v = arr[Math.floor(i * .85)] / 255, ang = i / 72 * 6.283 + ts * .00012;
+    const l = 4 + v * m * .2;
+    g.strokeStyle = `hsla(${hue + i * 2},90%,66%,.9)`;
+    g.beginPath();
+    g.moveTo(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R);
+    g.lineTo(cx + Math.cos(ang) * (R + l), cy + Math.sin(ang) * (R + l));
+    g.stroke();
+  }
+  g.strokeStyle = `hsla(${hue},80%,72%,.45)`; g.lineWidth = 2 + bass * 10;
+  g.beginPath(); g.arc(cx, cy, R * .82, 0, 6.283); g.stroke();
+  raf = requestAnimationFrame(drawSaver);
+}
+
+const pill = $('idlePill');
+setInterval(() => {
+  const idle = Date.now() - lastAct, left = Math.max(0, Math.ceil((IDLE_MS - idle) / 1000));
+  pill.textContent = ssOn ? '' : `🌙 Screensaver in ${left}s`;
+  pill.style.display = ssOn ? 'none' : 'block';
+  if (!ssOn && idle >= IDLE_MS) showSaver();
+}, 500);
+
+/* ---------------------------------------------------------- Spotify wiring */
+$('redir').textContent = SP.redirect;
+$('spClient').value = SP.clientId();
+const spState = t => { $('spState').textContent = '· ' + t; };
+const spMapEl = $('spMap');
+function fillMap() {
+  const raw = SP.rawMap(); spMapEl.innerHTML = '';
+  Object.keys(LISTS).forEach(k => {
+    const lab = document.createElement('label'); lab.className = 'fld';
+    lab.append(`${LISTS[k].name} (${LISTS[k].desc})`);
+    const inp = document.createElement('input');
+    inp.id = 'spm-' + k; inp.spellcheck = false; inp.placeholder = 'Playlist link or URI (blank = search)';
+    inp.value = (k in raw) ? raw[k] : SP_DEFAULTS[k].uri;
+    lab.appendChild(inp); spMapEl.appendChild(lab);
+  });
+}
+function saveMap() { const o = {}; Object.keys(LISTS).forEach(k => { o[k] = $('spm-' + k).value.trim(); }); SP.saveMap(o); }
+fillMap();
+
+SP.onStatus = m => setStatus(m);
+SP.onReady = () => {
+  spState('connected · player ready');
+  if (state.source === 'spotify' && state.listKey) playTrack(state.listKey, null);
+  else if (state.source === 'spotify') setStatus('Spotify is connected. Press "Read my mood" to start.');
+};
+SP.onState = () => {
+  if (!state.useSP) return;
+  const t = SP.track;
+  if (t) {
+    $('title').textContent = t.name; $('artist').textContent = t.artist + ' · Spotify';
+    $('ssTitle').textContent = t.name; $('ssSub').textContent = t.artist;
+    setArt(t.art);
+  }
+  syncPlayUI();
+};
+
+function setSource(src, persist = true) {
+  state.source = src;
+  document.querySelectorAll('#srcSeg button').forEach(b => b.classList.toggle('on', b.dataset.src === src));
+  if (persist) SP.setSource(src);
+  if (src === 'builtin') { SP.pause(); state.useSP = false; } else { Player.stop(); }
+}
+async function connectSpotify() {
+  const id = $('spClient').value.trim();
+  if (!id) { $('spDetails').open = true; setStatus('Paste your Spotify Client ID first.'); return; }
+  if (location.protocol === 'file:') { $('spDetails').open = true; setStatus('Spotify login needs the page served over http. Run "python -m http.server 8000" in this folder and open http://127.0.0.1:8000'); return; }
+  if (location.hostname === 'localhost') { setStatus('Open this page at http://127.0.0.1:8000 (Spotify no longer accepts "localhost" redirect URIs).'); return; }
+  SP.setClientId(id); saveMap(); SP.setSource('spotify');
+  try { await SP.login(); } catch (e) { setStatus('Could not start the Spotify login.'); }
+}
+$('srcSeg').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  Player.unlock();
+  if (b.dataset.src === 'spotify') {
+    if (!SP.clientId() || !SP.connected()) {
+      $('spDetails').open = true; $('spCard').scrollIntoView({ behavior: 'smooth' });
+      if (SP.clientId()) { await connectSpotify(); } else { setStatus('Add your Spotify Client ID in "Spotify setup" first.'); }
+      return;
+    }
+    setSource('spotify');
+    try { await SP.init(); } catch (err) { setStatus('Could not load the Spotify player. Check your connection.'); }
+  } else {
+    setSource('builtin');
+  }
+  if (state.listKey) playTrack(state.listKey, null);
+};
+$('spConnect').onclick = connectSpotify;
+$('spSave').onclick = () => { saveMap(); setStatus('Spotify playlists saved.'); };
+$('spReset').onclick = () => { SP.resetMap(); fillMap(); setStatus('Spotify playlists reset to defaults.'); };
+$('spDisc').onclick = () => { SP.logout(); setSource('builtin'); spState('not connected'); setStatus('Spotify disconnected. Using built-in music.'); };
+
+(async () => {
+  try { if (await SP.handleRedirect()) setStatus('Spotify connected! Press "Read my mood" to start.'); }
+  catch (e) { setStatus('Spotify login failed. Check the Client ID and that the Redirect URI matches exactly.'); }
+  if (SP.connected()) {
+    spState('connected');
+    if (SP.getSource() === 'spotify') {
+      setSource('spotify', false);
+      try { await SP.init(); } catch (e) { setStatus('Could not load the Spotify player. Check your connection.'); }
+    }
+  }
+})();
+
+setHue(225);
+syncPlayUI();
+})();
+</script>
+</body>
+</html>
